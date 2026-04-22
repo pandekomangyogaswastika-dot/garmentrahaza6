@@ -1,0 +1,16 @@
+/* App-specific styles - glassmorphism utilities */
+
+/* Background ambient gradient - uses CSS variable for theme awareness */
+.bg-ambient {
+  background: var(--ambient-gradient);
+}
+
+/* Responsive tables */
+@media (max-width: 640px) {
+  table {
+    font-size: 0.75rem;
+  }
+  table th, table td {
+    padding: 0.5rem 0.25rem;
+  }
+}

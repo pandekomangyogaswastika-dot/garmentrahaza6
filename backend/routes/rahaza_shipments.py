@@ -1,0 +1,532 @@
+"""
+PT Rahaza ERP — Shipments / Surat Jalan (Phase 14.1)
+
+Koleksi:
+  - rahaza_shipments {id, shipment_number, order_id, order_number_snapshot,
+                       customer_id, customer_name_snapshot, customer_address_snapshot,
+                       shipment_date, driver_name, vehicle_number, notes,
+                       status: 'draft'|'dispatched'|'delivered'|'cancelled',
+                       dispatched_at, delivered_at, created_at, created_by,
+                       items: [{wo_id, wo_number, model_code, model_name, size_code, qty}],
+                       auto_invoice_id, auto_invoice_number}
+
+Lifecycle:
+  draft → dispatched (terima konfirmasi kurir keluar)
+         → delivered (POD diterima)
+  draft → cancelled (batal)
+
+Fitur utama:
+  1. CRUD shipment
+  2. Status transition dengan audit + (saat dispatched) auto-generate AR invoice draft dari Order
+  3. PDF Surat Jalan (A5 printable)
+  4. Filter + search via DataTable v2 (client-side)
+
+Integrasi:
+  - Saat POST /shipments/{id}/dispatch:
+      * update status → dispatched
+      * log_audit
+      * auto create AR invoice draft (Phase 14.2) bila order.auto_invoice_on_ship=true
+        atau default True untuk sekarang. Prevent duplicate via field order.auto_invoiced
+"""
+from fastapi import APIRouter, Request, HTTPException
+from fastapi.responses import StreamingResponse
+from database import get_db
+from auth import require_auth, serialize_doc, log_activity
+from routes.rahaza_audit import log_audit
+from routes.rahaza_notifications import publish_notification
+from datetime import datetime, timezone
+from io import BytesIO
+import uuid
+
+router = APIRouter(prefix="/api/rahaza/shipments", tags=["Rahaza Shipments"])
+
+
+def _now():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _today():
+    return datetime.now(timezone.utc).date()
+
+
+async def _gen_shipment_number(db) -> str:
+    today = _today()
+    prefix = f"SJ-{today.strftime('%Y%m%d')}"
+    count = await db.rahaza_shipments.count_documents({"shipment_number": {"$regex": f"^{prefix}"}})
+    return f"{prefix}-{count + 1:03d}"
+
+
+# ─── CRUD ────────────────────────────────────────────────────────────────────
+@router.get("")
+async def list_shipments(request: Request):
+    await require_auth(request)
+    db = get_db()
+    sp = request.query_params
+    q = {}
+    if sp.get("status"):     q["status"] = sp["status"]
+    if sp.get("order_id"):   q["order_id"] = sp["order_id"]
+    if sp.get("customer_id"): q["customer_id"] = sp["customer_id"]
+    rows = await db.rahaza_shipments.find(q, {"_id": 0}).sort("shipment_date", -1).to_list(None)
+    return rows
+
+
+@router.get("/{sid}")
+async def get_shipment(sid: str, request: Request):
+    await require_auth(request)
+    db = get_db()
+    doc = await db.rahaza_shipments.find_one({"id": sid}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Shipment tidak ditemukan")
+    return doc
+
+
+@router.post("")
+async def create_shipment(body: dict, request: Request):
+    user = await require_auth(request)
+    db = get_db()
+
+    order_id = body.get("order_id")
+    if not order_id:
+        raise HTTPException(400, "order_id wajib diisi")
+    order = await db.rahaza_orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(404, "Order tidak ditemukan")
+
+    items = body.get("items") or []
+    if not items:
+        raise HTTPException(400, "Minimal 1 item (WO) dikirim")
+
+    # Snapshot WO items
+    enriched = []
+    for it in items:
+        wo_id = it.get("wo_id")
+        qty = float(it.get("qty") or 0)
+        if not wo_id or qty <= 0:
+            raise HTTPException(400, "Item shipment tidak valid (wo_id & qty wajib)")
+        wo = await db.rahaza_work_orders.find_one({"id": wo_id}, {"_id": 0})
+        if not wo:
+            raise HTTPException(404, f"WO {wo_id} tidak ditemukan")
+        if wo.get("order_id") != order_id:
+            raise HTTPException(400, f"WO {wo.get('wo_number')} bukan milik order ini")
+        enriched.append({
+            "wo_id": wo_id,
+            "wo_number": wo.get("wo_number"),
+            "model_code": wo.get("model_code_snapshot") or wo.get("model_code"),
+            "model_name": wo.get("model_name_snapshot") or wo.get("model_name"),
+            "size_code":  wo.get("size_code"),
+            "qty": qty,
+            "unit_price": float(it.get("unit_price") or 0),
+        })
+
+    customer = None
+    if order.get("customer_id"):
+        customer = await db.rahaza_customers.find_one({"id": order["customer_id"]}, {"_id": 0})
+
+    shp_num = await _gen_shipment_number(db)
+    doc = {
+        "id": str(uuid.uuid4()),
+        "shipment_number": shp_num,
+        "order_id": order_id,
+        "order_number_snapshot": order.get("order_number"),
+        "customer_id": order.get("customer_id"),
+        "customer_name_snapshot": (customer or {}).get("name") or order.get("customer_name_snapshot"),
+        "customer_address_snapshot": (customer or {}).get("address"),
+        "shipment_date": body.get("shipment_date") or _today().isoformat(),
+        "driver_name": body.get("driver_name") or "",
+        "vehicle_number": body.get("vehicle_number") or "",
+        "notes": body.get("notes") or "",
+        "status": "draft",
+        "items": enriched,
+        "total_qty": sum(i["qty"] for i in enriched),
+        "created_at": _now(),
+        "created_by": user.get("name") or user.get("email"),
+    }
+    await db.rahaza_shipments.insert_one(doc)
+    await log_activity(user["id"], user.get("name", ""), "create", "rahaza.shipment", shp_num)
+    await log_audit(db, entity_type="rahaza_shipment", entity_id=doc["id"], action="create",
+                    before=None, after={k: v for k, v in doc.items() if k != "_id"},
+                    user=user, request=request)
+    return serialize_doc(doc)
+
+
+@router.put("/{sid}")
+async def update_shipment(sid: str, body: dict, request: Request):
+    user = await require_auth(request)
+    db = get_db()
+    shp = await db.rahaza_shipments.find_one({"id": sid}, {"_id": 0})
+    if not shp: raise HTTPException(404, "Shipment tidak ditemukan")
+    if shp["status"] != "draft":
+        raise HTTPException(400, "Hanya shipment draft yang bisa diedit")
+    allowed = {k: v for k, v in body.items() if k in (
+        "shipment_date", "driver_name", "vehicle_number", "notes", "items"
+    )}
+    # Re-validate items jika ada
+    if "items" in allowed:
+        items = allowed["items"] or []
+        enriched = []
+        for it in items:
+            wo = await db.rahaza_work_orders.find_one({"id": it.get("wo_id")}, {"_id": 0})
+            if not wo: continue
+            enriched.append({
+                "wo_id": wo["id"],
+                "wo_number": wo.get("wo_number"),
+                "model_code": wo.get("model_code_snapshot") or wo.get("model_code"),
+                "model_name": wo.get("model_name_snapshot") or wo.get("model_name"),
+                "size_code": wo.get("size_code"),
+                "qty": float(it.get("qty") or 0),
+                "unit_price": float(it.get("unit_price") or 0),
+            })
+        allowed["items"] = enriched
+        allowed["total_qty"] = sum(i["qty"] for i in enriched)
+    allowed["updated_at"] = _now()
+    await db.rahaza_shipments.update_one({"id": sid}, {"$set": allowed})
+    out = await db.rahaza_shipments.find_one({"id": sid}, {"_id": 0})
+    await log_audit(db, entity_type="rahaza_shipment", entity_id=sid, action="update",
+                    before=shp, after=out, user=user, request=request)
+    return serialize_doc(out)
+
+
+@router.delete("/{sid}")
+async def delete_shipment(sid: str, request: Request):
+    user = await require_auth(request)
+    db = get_db()
+    shp = await db.rahaza_shipments.find_one({"id": sid}, {"_id": 0})
+    if not shp: raise HTTPException(404, "Shipment tidak ditemukan")
+    if shp["status"] != "draft":
+        raise HTTPException(400, "Hanya shipment draft yang bisa dihapus")
+    await db.rahaza_shipments.delete_one({"id": sid})
+    await log_audit(db, entity_type="rahaza_shipment", entity_id=sid, action="delete",
+                    before=shp, after=None, user=user, request=request)
+    return {"deleted": sid}
+
+
+# ─── STATUS TRANSITIONS ──────────────────────────────────────────────────────
+ALLOWED = {
+    "draft":      {"dispatched", "cancelled"},
+    "dispatched": {"delivered", "cancelled"},
+    "delivered":  set(),
+    "cancelled":  set(),
+}
+
+
+@router.post("/{sid}/status")
+async def change_status(sid: str, body: dict, request: Request):
+    user = await require_auth(request)
+    db = get_db()
+    shp = await db.rahaza_shipments.find_one({"id": sid}, {"_id": 0})
+    if not shp: raise HTTPException(404, "Shipment tidak ditemukan")
+    new_status = body.get("status")
+    if new_status not in ALLOWED.get(shp["status"], set()):
+        raise HTTPException(400, f"Transisi {shp['status']} → {new_status} tidak diizinkan")
+
+    upd = {"status": new_status, "updated_at": _now()}
+    if new_status == "dispatched": upd["dispatched_at"] = _now()
+    if new_status == "delivered":  upd["delivered_at"] = _now()
+
+    await db.rahaza_shipments.update_one({"id": sid}, {"$set": upd})
+
+    await log_audit(db, entity_type="rahaza_shipment", entity_id=sid, action="status_change",
+                    before={"status": shp["status"]}, after={"status": new_status},
+                    user=user, request=request)
+
+    # ─── Phase 14.2 — Auto AR Invoice Draft saat dispatch ────────────────────
+    auto_invoice = None
+    if new_status == "dispatched":
+        try:
+            auto_invoice = await _create_ar_invoice_from_shipment(db, shp, user, request)
+            if auto_invoice:
+                await db.rahaza_shipments.update_one(
+                    {"id": sid},
+                    {"$set": {
+                        "auto_invoice_id": auto_invoice["id"],
+                        "auto_invoice_number": auto_invoice["invoice_number"],
+                    }}
+                )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Auto AR invoice draft failed: {e}")
+
+    # Notify
+    await publish_notification(
+        db,
+        type_="shipment_status",
+        severity="success" if new_status in ("dispatched", "delivered") else "info",
+        title=f"Shipment {shp['shipment_number']}: {new_status}",
+        message=f"Order {shp.get('order_number_snapshot', '')} · {shp.get('total_qty', 0)} pcs"
+                + (f" → AR draft {auto_invoice['invoice_number']}" if auto_invoice else ""),
+        link_module="fin-ar-invoices" if auto_invoice else None,
+        link_id=auto_invoice["id"] if auto_invoice else None,
+        target_roles=["superadmin", "finance", "production_manager"],
+        dedup_key=f"ship_status::{sid}::{new_status}",
+    )
+
+    return {
+        "status": new_status,
+        "shipment_id": sid,
+        "auto_invoice_id": auto_invoice["id"] if auto_invoice else None,
+        "auto_invoice_number": auto_invoice["invoice_number"] if auto_invoice else None,
+    }
+
+
+# ─── AR INVOICE AUTO-DRAFT ──────────────────────────────────────────────────
+async def _gen_ar_invoice_number(db) -> str:
+    today = _today()
+    prefix = f"INV-{today.strftime('%Y%m%d')}"
+    count = await db.rahaza_ar_invoices.count_documents({"invoice_number": {"$regex": f"^{prefix}"}})
+    return f"{prefix}-{count + 1:03d}"
+
+
+async def _create_ar_invoice_from_shipment(db, shp: dict, user: dict, request):
+    """
+    Phase 14.2 — Generate AR Invoice draft otomatis dari Shipment.
+    Tidak duplicate: cek field shp['auto_invoice_id'] dulu.
+    """
+    if shp.get("auto_invoice_id"):
+        return None
+
+    items = shp.get("items") or []
+    if not items:
+        return None
+
+    # Total = sum (qty × unit_price); bila unit_price 0 semuanya, tetap buat draft (user bisa isi nanti).
+    total = 0.0
+    invoice_items = []
+    for it in items:
+        up = float(it.get("unit_price") or 0)
+        qty = float(it.get("qty") or 0)
+        amount = qty * up
+        total += amount
+        invoice_items.append({
+            "description": f"{it.get('model_name', '')} · {it.get('size_code', '')} ({it.get('wo_number', '')})",
+            "qty": qty,
+            "unit_price": up,
+            "amount": amount,
+        })
+
+    inv_num = await _gen_ar_invoice_number(db)
+    inv = {
+        "id": str(uuid.uuid4()),
+        "invoice_number": inv_num,
+        "customer_id": shp.get("customer_id"),
+        "customer_name": shp.get("customer_name_snapshot"),
+        "customer_address": shp.get("customer_address_snapshot"),
+        "order_id": shp.get("order_id"),
+        "order_number": shp.get("order_number_snapshot"),
+        "shipment_id": shp.get("id"),
+        "shipment_number": shp.get("shipment_number"),
+        "issue_date": _today().isoformat(),
+        "due_date": _today().isoformat(),  # default sama; user edit sesuai TOP customer
+        "items": invoice_items,
+        "subtotal": total,
+        "tax": 0,
+        "total": total,
+        "paid": 0,
+        "balance": total,
+        "status": "draft",
+        "notes": f"Auto-draft dari Shipment {shp.get('shipment_number')}",
+        "auto_generated": True,
+        "created_at": _now(),
+        "created_by": user.get("name") or user.get("email"),
+    }
+    await db.rahaza_ar_invoices.insert_one(inv)
+    await log_audit(db, entity_type="rahaza_ar_invoice", entity_id=inv["id"], action="auto_create",
+                    before=None, after={k: v for k, v in inv.items() if k != "_id"},
+                    user=user, request=request)
+    return inv
+
+
+# ─── PDF SURAT JALAN ─────────────────────────────────────────────────────────
+@router.get("/{sid}/pdf")
+async def shipment_pdf(sid: str, request: Request):
+    await require_auth(request)
+    db = get_db()
+    shp = await db.rahaza_shipments.find_one({"id": sid}, {"_id": 0})
+    if not shp: raise HTTPException(404, "Shipment tidak ditemukan")
+
+    # Load company info
+    company = await db.rahaza_company_settings.find_one({}, {"_id": 0}) or {}
+
+    pdf_bytes = _build_surat_jalan_pdf(shp, company)
+
+    return StreamingResponse(
+        BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="surat-jalan-{shp["shipment_number"]}.pdf"'},
+    )
+
+
+def _build_surat_jalan_pdf(shp: dict, company: dict) -> bytes:
+    """Build Surat Jalan PDF (A5 portrait)."""
+    from reportlab.lib.pagesizes import A5
+    from reportlab.lib.units import mm
+    from reportlab.pdfgen import canvas as rcanvas
+
+    buf = BytesIO()
+    w, h = A5  # 148 × 210 mm
+    c = rcanvas.Canvas(buf, pagesize=A5)
+
+    # ── Header ────────────────────────────────
+    y = h - 12 * mm
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(10 * mm, y, (company.get("name") or "PT Rahaza Garment").upper())
+    y -= 4 * mm
+    c.setFont("Helvetica", 8)
+    if company.get("address"):
+        c.drawString(10 * mm, y, str(company["address"])[:80])
+        y -= 3.5 * mm
+    if company.get("phone") or company.get("email"):
+        c.drawString(10 * mm, y, f"Telp: {company.get('phone', '-')} · {company.get('email', '')}")
+        y -= 3.5 * mm
+
+    # Garis pemisah
+    y -= 1 * mm
+    c.line(10 * mm, y, w - 10 * mm, y)
+    y -= 5 * mm
+
+    # ── Title ─────────────────────────────────
+    c.setFont("Helvetica-Bold", 14)
+    c.drawCentredString(w / 2, y, "SURAT JALAN")
+    y -= 5 * mm
+    c.setFont("Helvetica", 9)
+    c.drawCentredString(w / 2, y, f"No: {shp['shipment_number']}")
+    y -= 6 * mm
+
+    # ── Metadata 2 kolom ──────────────────────
+    c.setFont("Helvetica", 9)
+    left_x = 10 * mm
+    right_x = w / 2 + 2 * mm
+
+    def row(label, val, lx, ly):
+        c.setFont("Helvetica", 8)
+        c.drawString(lx, ly, label)
+        c.setFont("Helvetica", 9)
+        c.drawString(lx, ly - 4 * mm, str(val) if val else "-")
+
+    row("Tanggal Kirim", shp.get("shipment_date"), left_x, y)
+    row("Kendaraan", shp.get("vehicle_number"), right_x, y)
+    y -= 10 * mm
+    row("Pengemudi", shp.get("driver_name"), left_x, y)
+    row("Order #", shp.get("order_number_snapshot"), right_x, y)
+    y -= 10 * mm
+
+    # ── Kepada ────────────────────────────────
+    c.setFont("Helvetica-Bold", 9)
+    c.drawString(left_x, y, "Kepada Yth:")
+    y -= 4 * mm
+    c.setFont("Helvetica", 9)
+    c.drawString(left_x, y, shp.get("customer_name_snapshot") or "-")
+    y -= 4 * mm
+    if shp.get("customer_address_snapshot"):
+        addr = str(shp["customer_address_snapshot"])[:100]
+        c.setFont("Helvetica", 8)
+        c.drawString(left_x, y, addr)
+        y -= 4 * mm
+    y -= 2 * mm
+
+    # ── Items table ───────────────────────────
+    c.setFont("Helvetica-Bold", 8)
+    c.drawString(left_x, y, "No")
+    c.drawString(left_x + 10 * mm, y, "Model · Size")
+    c.drawString(w - 40 * mm, y, "WO")
+    c.drawRightString(w - 10 * mm, y, "Qty")
+    y -= 1 * mm
+    c.line(10 * mm, y, w - 10 * mm, y)
+    y -= 4 * mm
+
+    c.setFont("Helvetica", 8)
+    total_q = 0
+    for idx, it in enumerate(shp.get("items", []), start=1):
+        if y < 30 * mm:
+            c.showPage(); y = h - 15 * mm
+            c.setFont("Helvetica", 8)
+        q = float(it.get("qty") or 0)
+        total_q += q
+        c.drawString(left_x, y, str(idx))
+        label = f"{it.get('model_name') or it.get('model_code', '')} · {it.get('size_code', '')}"
+        c.drawString(left_x + 10 * mm, y, label[:45])
+        c.drawString(w - 40 * mm, y, (it.get("wo_number") or "")[:15])
+        c.drawRightString(w - 10 * mm, y, f"{q:.0f} pcs")
+        y -= 4.5 * mm
+
+    y -= 1 * mm
+    c.line(10 * mm, y, w - 10 * mm, y)
+    y -= 4 * mm
+    c.setFont("Helvetica-Bold", 9)
+    c.drawString(left_x + 10 * mm, y, "Total")
+    c.drawRightString(w - 10 * mm, y, f"{total_q:.0f} pcs")
+    y -= 8 * mm
+
+    # ── Notes ─────────────────────────────────
+    if shp.get("notes"):
+        c.setFont("Helvetica", 8)
+        c.drawString(left_x, y, f"Catatan: {str(shp['notes'])[:120]}")
+        y -= 6 * mm
+
+    # ── Tanda tangan ──────────────────────────
+    y = max(y, 35 * mm)  # ensure space
+    c.setFont("Helvetica", 8)
+    c.drawCentredString(left_x + 18 * mm, y, "Pengirim")
+    c.drawCentredString(w / 2, y, "Pengemudi")
+    c.drawCentredString(w - left_x - 18 * mm, y, "Penerima")
+    y -= 18 * mm
+    c.line(left_x + 4 * mm, y, left_x + 32 * mm, y)
+    c.line(w / 2 - 14 * mm, y, w / 2 + 14 * mm, y)
+    c.line(w - left_x - 32 * mm, y, w - left_x - 4 * mm, y)
+    y -= 4 * mm
+    c.setFont("Helvetica", 7)
+    c.drawCentredString(left_x + 18 * mm, y, "(nama jelas & ttd)")
+    c.drawCentredString(w / 2, y, shp.get("driver_name") or "(nama jelas & ttd)")
+    c.drawCentredString(w - left_x - 18 * mm, y, "(nama jelas & ttd)")
+
+    # Footer
+    c.setFont("Helvetica-Oblique", 6)
+    c.drawRightString(w - 10 * mm, 6 * mm, f"Dicetak: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
+
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+# ─── CUSTOMER STATEMENT (Phase 14.4 — bonus) ────────────────────────────────
+@router.get("/customer-statement/{customer_id}")
+async def customer_statement(customer_id: str, request: Request):
+    """
+    Statement piutang customer dengan rentang tanggal.
+    Response: {customer, opening_balance, items: [...], total_billed, total_paid, closing_balance}
+    """
+    await require_auth(request)
+    db = get_db()
+    sp = request.query_params
+    date_from = sp.get("date_from")
+    date_to = sp.get("date_to")
+
+    cust = await db.rahaza_customers.find_one({"id": customer_id}, {"_id": 0})
+    if not cust:
+        raise HTTPException(404, "Customer tidak ditemukan")
+
+    q = {"customer_id": customer_id}
+    if date_from and date_to:
+        q["issue_date"] = {"$gte": date_from, "$lte": date_to}
+    invoices = await db.rahaza_ar_invoices.find(q, {"_id": 0}).sort("issue_date", 1).to_list(None)
+
+    total_billed = sum(float(i.get("total") or 0) for i in invoices)
+    total_paid = sum(float(i.get("paid") or 0) for i in invoices)
+    closing = total_billed - total_paid
+
+    return {
+        "customer": {
+            "id": cust.get("id"),
+            "code": cust.get("code"),
+            "name": cust.get("name"),
+            "address": cust.get("address"),
+            "phone": cust.get("phone"),
+        },
+        "period": {"from": date_from, "to": date_to},
+        "invoices": invoices,
+        "summary": {
+            "count": len(invoices),
+            "total_billed": total_billed,
+            "total_paid": total_paid,
+            "outstanding": closing,
+        },
+    }

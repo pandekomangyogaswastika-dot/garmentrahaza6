@@ -1,0 +1,30 @@
+[
+  {
+    "content": "Copy garmentrahaza5 repo to /app (backend + frontend, preserve .env files)",
+    "status": "completed"
+  },
+  {
+    "content": "Install all dependencies (backend pip + frontend yarn)",
+    "status": "completed"
+  },
+  {
+    "content": "Verify app is running (check logs)",
+    "status": "completed"
+  },
+  {
+    "content": "Phase 18B: Andon Panel (operator help request + supervisor notification + SLA)",
+    "status": "completed"
+  },
+  {
+    "content": "Phase 18C: Shop-Floor TV Mode (full-screen display, no login needed)",
+    "status": "completed"
+  },
+  {
+    "content": "Phase 18D: SOP Inline (work instructions per model×process, operator view integration)",
+    "status": "completed"
+  },
+  {
+    "content": "End-to-end testing of Phase 18B, 18C, 18D",
+    "status": "in_progress"
+  }
+]
