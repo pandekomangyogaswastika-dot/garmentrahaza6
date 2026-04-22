@@ -17,7 +17,7 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 
 class RahazaPhase18Test:
-    def __init__(self, base_url: str = "https://fashion-hub-1676.preview.emergentagent.com"):
+    def __init__(self, base_url: str = "https://garment-erp-aps.preview.emergentagent.com"):
         self.base_url = base_url
         self.token = None
         self.tests_run = 0

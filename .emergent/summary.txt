@@ -1,0 +1,120 @@
+<analysis>**original_problem_statement**: 
+i want you to continue development from this repo, https://github.com/pandekomangyogaswastika-dot/garmentrahaza5. copy all the repo first, including the document. the read all document so you know the context and the state development. clarify to me first then we start develop
+PRODUCT REQUIREMENTS: Implement the remaining phases specified in  which currently dictates transforming the Production module from a system-of-record to a system-of-guidance. Specifically, complete Phase 18B (Andon Panel), Phase 18C (Shop-Floor TV Mode), and Phase 18D (SOP Inline).
+
+**User's preferred language**: **Indonesian** (INSTRUCT next agent to respond in the user's preferred language only)
+
+**what currently exists?** 
+A robust, end-to-end Fashion ERP built on the FARM stack (FastAPI, React, MongoDB). The app handles user auth, module-based routing (PortalShell), work orders, and real-time alerts. It has just been extended to support Andon operations (help requests), full-screen TV shop-floor displays, and inline Operator SOPs.
+
+**Last working item**: 
+    - Last item agent was working: Completed, tested, and verified Phases 18B, 18C, and 18D. All frontend modules (, , ) and backend APIs (, , ) have been fully integrated, debugged, and validated. Passed control to user to verify the changes before moving on to Phase 19.
+    - Status: USER VERIFICATION PENDING
+    - Agent Testing Done: Y
+    - Which testing method agent to use?  was utilized, alongside manual Python scripts (cURL equivalents) and the screenshot tool for verifying the  route UI and main portals.
+    - User Testing Done: N
+
+**All Pending/In progress Issue list**: 
+None.
+
+**In progress Task List**: 
+None. 
+
+**Upcoming and Future Tasks**
+Upcoming Tasks:
+- Phase 19: Advanced Planning & Scheduling (APS) (P1)
+  - APS Gantt Chart / Interactive Timeline
+  - Auto-Scheduling logic (Load leveling, capacity calculation based on historical SMV)
+- Phase 20: Intelligent Ops (PENDING) (P2)
+  - Add thin AI layer for report/search
+  - OEE (Overall Equipment Effectiveness) tracking and closed-loop rework enforcement
+
+**Completed work in this session**
+- Cloned external repository to  and preserved environment setup.
+- Installed missing dependencies: , .
+- Phase 18B (Andon Panel) (DONE): , , . Added background SLA checks to .
+- Phase 18C (TV Mode) (DONE): , , updated  with unauthenticated  route.
+- Phase 18D (SOP Inline) (DONE): , , .
+- Operator UI Integration (DONE): Embedded Andon Panel and SOP actions into .
+
+**Earlier issues found/mentioned but not fixed**
+None. (Note:  reported a frontend routing issue, but the main agent confirmed it was a false positive related to React CRA SPA behavior. Everything renders perfectly).
+
+**Known issue recurrence from previous fork**
+- Issue recurrence in previous fork: N/A (Initial fork)
+- Recurrence count: 0
+- Status: RESOLVED
+
+**Code Architecture**
+- : FastAPI initialization, CORS, DB connection, routing.
+- : Modular endpoints (, , , etc.).
+- : Root React application with auth gate and unauthenticated  route.
+- : Shared UI components, , .
+- : Registration for dynamic module loading based on RBAC.
+
+**Key Technical Concepts**
+Frontend: React, Tailwind CSS, Shadcn/ui
+Backend: FastAPI, Python
+Database: MongoDB (Motor Asyncio)
+Routing: React Router DOM / custom Portal Selector
+
+**key DB schema**
+  - : {email, password, role}
+  - : {id, status, notes, age_minutes, sla_supervisor_overdue}
+  - : {id, model_id, process_id, title, content_markdown}
+  - : {order_id, model_id}
+
+**changes in tech stack**
+- Added  and  to  for UI components. 
+
+**All files of reference** 
+- : Registered new routers and added indexes.
+- : Injected Andon UI and SOP action buttons.
+-  (New): Andon ticket creation, SLA logic.
+-  (New): Kiosk mode APIs fetching aggregated line metrics.
+-  (New): SOP CRUD endpoints.
+-  (New)
+-  (New)
+-  (New)
+-  (New)
+-  (New)
+
+**Areas that need refactoring**: 
+None currently required. Clean, modular approach was followed.
+
+**key api endpoints**
+- 
+- 
+- 
+
+**Critical Info for New Agent**
+- When pushing notifications to the background,  expects  as an argument, NOT .
+- The Shop-Floor TV route () deliberately bypasses normal RBAC authentication so it can run unattended on shop-floor kiosks.
+- Remember to reply in Indonesian. 
+
+**documents and test reports created in this job**
+-  (Updated with Phase 18 completion and Phase 19/20 remaining steps)
+- 
+
+**Last 10 User Messages and any pending HUMAN messages**
+- The agent just passed completion summary (via ) for Phase 18B, 18C, 18D.
+- **Pending Human Message**: The agent is awaiting user confirmation and approval to begin Phase 19 (Advanced Planning & Scheduling).
+
+**Project Health Check:**
+- All systems working perfectly. No mocks utilized. Real database inserts and reads functioning across newly added modules.
+
+**3rd Party Integrations** 
+- None explicitly activated in this session. Future phases (Phase 20) may require an LLM for operations analysis via Emergent LLM Key.
+
+**Testing status**
+- Testing agent used after significant changes: YES
+- Troubleshoot agent used after agent stuck in loop: NO
+- Test files created: 
+- Known regressions: None
+
+**Credentials to test flow:**
+Email: 
+Password: 
+
+**What agent forgot to execute**
+- Nothing. The agent strictly followed the provided documentation, implemented the phases, tested them properly, updated the , and asked the human for review.</analysis>
