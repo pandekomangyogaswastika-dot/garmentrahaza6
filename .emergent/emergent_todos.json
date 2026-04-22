@@ -1,30 +1,34 @@
 [
   {
-    "content": "Copy garmentrahaza5 repo to /app (backend + frontend, preserve .env files)",
+    "content": "Backend: buat /app/backend/routes/rahaza_aps.py dengan endpoint /api/rahaza/aps/gantt (aggregate lines + WOs + capacity heatmap) dan /api/rahaza/aps/wo/{wo_id} (detail)",
     "status": "completed"
   },
   {
-    "content": "Install all dependencies (backend pip + frontend yarn)",
+    "content": "Backend: tambah PATCH /api/rahaza/aps/wo/{wo_id}/reschedule untuk update target_start_date/target_end_date",
     "status": "completed"
   },
   {
-    "content": "Verify app is running (check logs)",
+    "content": "Backend: register rahaza_aps_router di server.py",
     "status": "completed"
   },
   {
-    "content": "Phase 18B: Andon Panel (operator help request + supervisor notification + SLA)",
+    "content": "Frontend: buat /app/frontend/src/components/erp/APSGanttModule.jsx (header + KPI strip + toolbar + Gantt viewport dengan sticky header/left col + capacity heatmap + side panel detail)",
     "status": "completed"
   },
   {
-    "content": "Phase 18C: Shop-Floor TV Mode (full-screen display, no login needed)",
+    "content": "Frontend: register moduleId 'prod-aps-gantt' di moduleRegistry.js dan tambah menu di PortalShell.jsx (Production → RINGKASAN)",
     "status": "completed"
   },
   {
-    "content": "Phase 18D: SOP Inline (work instructions per model×process, operator view integration)",
+    "content": "Verify: cek esbuild lint frontend, restart services, take screenshot dari /#prod-aps-gantt untuk verifikasi UI",
     "status": "completed"
   },
   {
-    "content": "End-to-end testing of Phase 18B, 18C, 18D",
-    "status": "completed"
+    "content": "Test: panggil testing_agent_v3 untuk Phase 19A (backend endpoints + frontend rendering + reschedule flow)",
+    "status": "in_progress"
+  },
+  {
+    "content": "Update plan.md & tandai Phase 19A COMPLETED setelah verifikasi user",
+    "status": "pending"
   }
 ]

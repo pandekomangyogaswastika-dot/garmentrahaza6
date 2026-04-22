@@ -4,7 +4,7 @@
 - Transform modul Produksi dari **system-of-record** → **system-of-guidance** (guided workflow, proactive alerts, traceability, decision support).
 - Deliver incremental, reversible improvements (additive) tanpa mematahkan modul existing.
 - Prioritaskan fitur lantai produksi yang menurunkan beban kognitif user: **scan → input cepat**, **rework enforcement**, **alert proaktif**, **andon**, **TV mode**, dan **SOP inline**.
-- Setelah Phase 18 selesai, fokus bergeser ke **planning & forecasting** (Phase 19) dan pengetatan operasional (Phase 20).
+- Setelah Phase 18 selesai dan diverifikasi user, fokus bergeser ke **planning & scheduling** (Phase 19 / APS). Phase 20 ditunda sampai Phase 19 stabil.
 
 ---
 
@@ -84,7 +84,7 @@
 
 ---
 
-## Phase 18 — Proactive Floor (COMPLETED — sub-phased)
+## Phase 18 — Proactive Floor (COMPLETED — verified by user)
 ### Objectives
 - Sistem proaktif: alert realtime + Andon + TV mode + SOP inline.
 - Menurunkan response time supervisor/manager saat ada masalah.
@@ -272,25 +272,121 @@
 
 ---
 
-## Phase 19 — Plan & Forecast (PENDING)
+## Phase 19 — Advanced Planning & Scheduling (APS) (PENDING — start Phase 19A)
 ### Objectives
-- Tambah planning layer: schedule, kapasitas, balancing, forecast due-risk.
+- Tambah layer planning: **Gantt timeline**, kapasitas per line, balancing, dan sinyal risiko due-date.
+- Tetap additive: tidak mengubah flow eksekusi; APS membaca dari Work Orders, Lines, Shifts, WIP events.
+- Implementasi berurutan sesuai keputusan user: **19A (Gantt) → 19B (Auto-Scheduling)**.
 
-### Proposed Scope (draft)
-- Capacity model per line/shift (pcs/hour) + staffing.
-- Rough-cut planning per WO: start/end estimate + risk flags.
-- “What’s next” plan view for supervisor (today/tomorrow).
+### Decisions (user-confirmed)
+- Phase 18 sudah diverifikasi user → lanjut Phase 19.
+- Prioritas: kerjakan **keduanya** secara berurutan (Gantt dulu → Auto-Scheduling).
+- Gantt **custom build** (tanpa library pihak ketiga) memakai stack existing: Tailwind + Glass + Shadcn + recharts.
+- Sumber data:
+  - Input utama: **Work Orders** existing + data master.
+  - Kapasitas: `rahaza_lines.capacity_per_hour`.
+  - Estimasi waktu/SMV: derive dari historis `rahaza_wip_events` (tanpa entry manual sebagai default).
+- Fokus Phase 19 saja dulu; Phase 20 ditunda.
 
-### Next Actions
-- Confirm planning horizon (harian/mingguan) + definisi kapasitas per line.
-- Confirm data entry approach (manual vs derived from historical output).
+### Design & UX Guidelines (locked)
+- Gunakan guideline: `/app/design_guidelines.md` — **“Rahaza APS (Phase 19) — Galaxy Glass Scheduling”**.
+- Prinsip utama: preserve **glass-dark UI**, performa scroll (target 60fps), tidak pakai `transition-all`, label Bahasa Indonesia, dan wajib `data-testid` untuk elemen interaktif.
+
+### Data yang tersedia (current)
+- `rahaza_work_orders`: `target_start_date`, `target_end_date`, `qty`, `priority`, `status`, `model_id`, `size_id`, `completed_qty`.
+- `rahaza_lines`: `capacity_per_hour`, `process_id`.
+- `rahaza_shifts`: `start_time`, `end_time` (jika ada), dll.
+- `rahaza_wip_events`: historis output/QC untuk derivasi SMV/throughput.
+- `rahaza_line_assignments`: granular plan harian (dipakai eksekusi; APS dapat mengkonsumsi/men-generate draft assignment).
 
 ---
 
-## Phase 20 — Intelligent Ops (PENDING)
+### Phase 19A — APS Gantt Chart / Interactive Timeline (PENDING — TODO ONLY)
+**Goal:** menyediakan tampilan jadwal produksi yang bisa discan cepat: WO → line → rentang tanggal, lengkap dengan kapasitas harian dan risiko.
+
+#### 19A.1 Backend — APS read model (new `rahaza_aps.py`)
+**Location:** `/app/backend/routes/rahaza_aps.py`
+
+**Endpoints (proposed, MVP)**
+- `GET /api/rahaza/aps/gantt`
+  - Query: `from=YYYY-MM-DD&to=YYYY-MM-DD&process_id=&line_id=&status=&priority=&model_id=`
+  - Output: 
+    - `lines[]` (id, code, name, capacity_per_hour, process_id)
+    - `work_orders[]` (id, wo_number, model, qty, status, priority, start/end target, progress_pct)
+    - `bars[]` mapping WO ke line + computed fields (start/end, progress, risk)
+    - `capacity[]` per line per day (load %, overload flags)
+- `GET /api/rahaza/aps/wo/{wo_id}`
+  - Detail untuk side panel: progress breakdown + rekomendasi risiko sederhana.
+
+**Computation (MVP)**
+- Risk flags:
+  - `overdue` bila `today > target_end_date` dan `progress_pct < 100%`.
+  - `at_risk` bila remaining work > remaining capacity sampai due date (rough-cut).
+- Capacity per day:
+  - dasar `capacity_per_hour * jam_kerja_shift` (MVP default 8 jam jika tidak ada kalender).
+  - load dihitung dari pembagian qty WO di rentang hari (MVP rata), untuk heatmap indikatif.
+
+**Notes**
+- Phase 19A tidak mengubah data WO/assignment; sifatnya read/aggregate.
+
+#### 19A.2 Frontend — APS Gantt page (new module)
+**Location:** `/app/frontend/src/components/erp/APSGanttModule.jsx`
+
+**UI Deliverables (MVP)**
+- Page header + KPI strip (total WO, overdue, at-risk, load avg).
+- Toolbar:
+  - Search WO
+  - Filter status/prioritas/model
+  - Zoom Day/Week/Month
+  - Legend status/risk
+- Gantt viewport:
+  - Sticky left column (line code/name + mini KPI)
+  - Sticky timeline header
+  - Bars per WO (absolute-positioned) dengan status color + progress overlay
+  - “Now” indicator
+  - Capacity heatmap strip per line
+- Detail side-panel (Sheet): klik bar membuka detail WO + tombol “Ubah Jadwal” (MVP: dialog edit tanggal target_start/end).
+
+**Testing hooks**
+- Wajib ikuti `data-testid` list di `/app/design_guidelines.md`.
+
+#### 19A.3 Wiring
+- Register moduleId baru: `prod-aps-gantt` di `moduleRegistry.js`.
+- Tambah menu di `PortalShell.jsx` (Production) section yang sesuai (mis. RINGKASAN atau EKSEKUSI) dengan label: **“APS — Jadwal (Gantt)”**.
+- `server.py`: include `rahaza_aps_router`.
+
+#### 19A.4 Success Criteria
+- Gantt bisa render untuk horizon default (mis. 14/30 hari) tanpa crash.
+- Scroll horizontal + vertical terasa smooth untuk dataset sedang (≥ 100 WO bars).
+- Risk & capacity heatmap terlihat dan konsisten.
+- Klik bar membuka detail; edit tanggal target tersimpan (bila diaktifkan di MVP) atau minimal tersimpan sebagai draft (opsional).
+
+#### 19A.5 Out of Scope (explicit)
+- Drag-to-reschedule (bisa setelah MVP).
+- Optimasi kalender kerja lengkap (libur, multi-shift) — ditunda ke 19B atau hardening.
+- Komit ke `rahaza_line_assignments` dari APS — ditunda ke 19B.
+
+---
+
+### Phase 19B — Auto-Scheduling (PENDING — will start after 19A)
+**Goal:** auto-alokasi WO ke line dan tanggal berbasis kapasitas, prioritas, dan estimasi waktu (SMV) yang derived dari historis.
+
+#### High-level scope (draft)
+- Derive **SMV historis** per model×process (dan bila memungkinkan size) dari `rahaza_wip_events`.
+- Generate schedule proposal (draft) untuk rentang `from-to`:
+  - load leveling per line
+  - respect due-date & priority
+  - output preview before/after + commit.
+
+#### Likely new collections (to be confirmed in implementation)
+- `rahaza_smv_cache` (optional): simpan SMV hasil derivasi + updated_at.
+- `rahaza_aps_schedule_runs` (optional): simpan hasil run untuk audit + rollback.
+
+---
+
+## Phase 20 — Intelligent Ops (DEFERRED)
 ### Objectives
 - Add thin AI layer untuk report/search, dan OEE + closed-loop rework enforcement.
 
 ### Next Actions
-- Approve AI scope + cost/limits.
-- Define OEE KPIs required (availability/performance/quality) and data capture gaps.
+- Defer sampai Phase 19 stabil dan user approve scope.

@@ -11,7 +11,7 @@ import {
   ArrowDownToLine, MapPin, ClipboardCheck, PackageOpen,
   FileText, CreditCard, TrendingUp, PieChart, UserCog,
   Factory, Wrench, Timer, ListChecks, LayoutGrid, ClipboardList,
-  Archive, Clock, Warehouse, Truck, Hammer, Siren, AlertTriangle, Tv,
+  Archive, Clock, Warehouse, Truck, Hammer, Siren, AlertTriangle, Tv, Layers,
 } from 'lucide-react';
 
 // Portal labels shown as badge next to brand (top-left). Click brand to go back to selector.
@@ -71,6 +71,7 @@ const PORTAL_NAV = {
         items: [
           { id: 'production-dashboard', label: 'Dashboard Produksi (WIP)', icon: LayoutDashboard },
           { id: 'prod-line-board',      label: 'Line Board',               icon: LayoutGrid },
+          { id: 'prod-aps-gantt',       label: 'APS — Jadwal (Gantt)',     icon: Layers },
         ]
       },
       {

@@ -260,6 +260,7 @@ from routes.rahaza_alerts import (
 from routes.rahaza_andon import router as rahaza_andon_router
 from routes.rahaza_tv import router as rahaza_tv_router
 from routes.rahaza_sop import router as rahaza_sop_router
+from routes.rahaza_aps import router as rahaza_aps_router
 
 # NOTE: legacy routers removed for PT Rahaza rebuild:
 #   buyer_portal, retail, distribution, shipments, rnd, cutting
@@ -301,6 +302,7 @@ app.include_router(rahaza_alerts_router)
 app.include_router(rahaza_andon_router)
 app.include_router(rahaza_tv_router)
 app.include_router(rahaza_sop_router)
+app.include_router(rahaza_aps_router)
 
 # ─── CORS MIDDLEWARE ────────────────────────────────────────────────────────
 app.add_middleware(

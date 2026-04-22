@@ -84,6 +84,7 @@ const ManagementOverviewModule     = lazy(() => import('./ManagementOverviewModu
 const RahazaShipmentsModule        = lazy(() => import('./RahazaShipmentsModule'));
 const AndonBoardModule             = lazy(() => import('./AndonBoardModule'));
 const RahazaSOPModule              = lazy(() => import('./RahazaSOPModule'));
+const APSGanttModule               = lazy(() => import('./APSGanttModule'));
 
 // Module map — id → component. IDs MUST be unique.
 export const MODULE_REGISTRY = {
@@ -197,6 +198,9 @@ export const MODULE_REGISTRY = {
 
   // Produksi · SOP Inline (Phase 18D)
   'prod-sop': RahazaSOPModule,
+
+  // Produksi · APS Gantt (Phase 19A)
+  'prod-aps-gantt': APSGanttModule,
 };
 
 export const DEFAULT_MODULE = ManagementDashboard;
