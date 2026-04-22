@@ -243,7 +243,37 @@ export default function APSGanttModule({ token }) {
         unassigned.push(b);
       }
     });
-    return { map: m, unassigned };
+    // Greedy lane assignment per line: bars that don't overlap can share a lane.
+    const assignLanes = (bars) => {
+      const sorted = [...bars].sort((a, b) =>
+        (a.visible_start || a.start_date).localeCompare(b.visible_start || b.start_date)
+      );
+      const laneEndISO = []; // per lane, last end date consumed
+      sorted.forEach((b) => {
+        const s = b.visible_start || b.start_date;
+        const e = b.visible_end || b.end_date;
+        let placed = false;
+        for (let li = 0; li < laneEndISO.length; li += 1) {
+          if (s > laneEndISO[li]) {
+            laneEndISO[li] = e;
+            b.__lane = li;
+            placed = true;
+            break;
+          }
+        }
+        if (!placed) {
+          b.__lane = laneEndISO.length;
+          laneEndISO.push(e);
+        }
+      });
+      return { bars: sorted, laneCount: Math.max(1, laneEndISO.length) };
+    };
+    const lineBars = new Map();
+    for (const [lid, arr] of m.entries()) {
+      lineBars.set(lid, assignLanes(arr));
+    }
+    const unassignedObj = assignLanes(unassigned);
+    return { lineBars, unassigned: unassignedObj };
   }, [filteredBars]);
 
   // Group capacity by line+date
@@ -286,6 +316,11 @@ export default function APSGanttModule({ token }) {
     });
     return m;
   }, [lines, filteredBars]);
+
+  // Lane height — bars stack vertically with 4px gap
+  const LANE_BAR_HEIGHT = 20;
+  const LANE_GAP = 4;
+  const laneTop = (lane) => 6 + lane * (LANE_BAR_HEIGHT + LANE_GAP);
 
   const refresh = () => load();
 
@@ -535,13 +570,17 @@ export default function APSGanttModule({ token }) {
 
               {/* Line rows */}
               {lines.map((ln) => {
-                const bs = barsByLine.map.get(ln.id) || [];
+                const laneData = barsByLine.lineBars.get(ln.id) || { bars: [], laneCount: 1 };
+                const bs = laneData.bars;
+                const laneCount = laneData.laneCount;
+                const lineAreaHeight = Math.max(LINE_HEIGHT, 12 + laneCount * (LANE_BAR_HEIGHT + LANE_GAP));
+                const rowHeight = lineAreaHeight + HEATMAP_HEIGHT;
                 const lkpi = lineKpi.get(ln.id) || { activeWo: 0, qtyTotal: 0 };
                 return (
                   <div
                     key={ln.id}
                     className="flex border-b border-[var(--glass-border)]/70 hover:bg-[var(--card-surface-hover)] group"
-                    style={{ minHeight: ROW_HEIGHT }}
+                    style={{ minHeight: rowHeight }}
                     data-testid={`aps-line-row-${ln.id}`}
                   >
                     {/* Sticky left col */}
@@ -575,8 +614,8 @@ export default function APSGanttModule({ token }) {
 
                     {/* Timeline area */}
                     <div className="relative" style={{ width: timelineWidth }}>
-                      {/* Grid lines (weekends + today) */}
-                      <div className="absolute inset-0 flex">
+                      {/* Grid lines (weekends + today) — background only, no click */}
+                      <div className="absolute inset-0 flex pointer-events-none" aria-hidden="true">
                         {dayObjs.map((d, i) => {
                           const weekend = d.getDay() === 0 || d.getDay() === 6;
                           const isToday = i === todayIdx;
@@ -603,22 +642,21 @@ export default function APSGanttModule({ token }) {
                       )}
 
                       {/* WO bars */}
-                      <div className="relative" style={{ height: LINE_HEIGHT }}>
-                        {bs.map((b, bi) => {
+                      <div className="relative" style={{ height: lineAreaHeight }}>
+                        {bs.map((b) => {
                           const g = barGeometry(b);
                           if (g.width <= 0) return null;
                           const sm = STATUS_META[b.status] || STATUS_META.draft;
                           const rm = RISK_META[b.risk] || RISK_META.on_track;
                           const selected = selectedWoId === b.wo_id;
-                          // Stagger bars vertically to avoid overlap (max 2 rows visually)
-                          const top = 6 + (bi % 2) * 22;
+                          const top = laneTop(b.__lane ?? 0);
                           return (
                             <button
                               key={b.wo_id}
                               type="button"
                               onClick={() => openDetail(b.wo_id)}
                               className={`absolute rounded-md border ${sm.bar} ${b.risk === 'overdue' ? 'ring-2 ring-red-400/50' : b.risk === 'at_risk' ? 'ring-1 ring-amber-400/45' : ''} ${selected ? 'ring-2 ring-sky-400 z-20' : 'z-0'} px-2 py-1 flex items-center overflow-hidden hover:-translate-y-0.5 hover:shadow-lg hover:z-20 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 transition-[transform,box-shadow,background-color] duration-200 cursor-pointer`}
-                              style={{ left: g.left, width: g.width, top, height: 22 }}
+                              style={{ left: g.left, width: g.width, top, height: LANE_BAR_HEIGHT }}
                               title={`${b.wo_number} · ${b.model_code || '-'} · ${b.qty} pcs · ${rm.label}`}
                               data-testid={`aps-wo-bar-${b.wo_id}`}
                               aria-label={`Work order ${b.wo_number}, ${sm.label}, risiko ${rm.label}`}
@@ -672,46 +710,50 @@ export default function APSGanttModule({ token }) {
               })}
 
               {/* Unassigned row */}
-              {barsByLine.unassigned.length > 0 && (
-                <div
-                  className="flex border-b border-[var(--glass-border)]/70 bg-amber-400/5"
-                  style={{ minHeight: ROW_HEIGHT }}
-                  data-testid="aps-line-row-unassigned"
-                >
+              {barsByLine.unassigned.bars.length > 0 && (() => {
+                const unLaneCount = barsByLine.unassigned.laneCount;
+                const unLineAreaHeight = Math.max(LINE_HEIGHT, 12 + unLaneCount * (LANE_BAR_HEIGHT + LANE_GAP));
+                return (
                   <div
-                    className="sticky left-0 z-20 flex flex-col justify-center px-3 bg-[var(--card-surface)]/92 backdrop-blur border-r border-[var(--glass-border)]"
-                    style={{ width: LEFT_COL_WIDTH, minWidth: LEFT_COL_WIDTH }}
+                    className="flex border-b border-[var(--glass-border)]/70 bg-amber-400/5"
+                    style={{ minHeight: unLineAreaHeight + HEATMAP_HEIGHT }}
+                    data-testid="aps-line-row-unassigned"
                   >
-                    <div className="flex items-center gap-1.5">
-                      <AlertTriangle className="w-3.5 h-3.5 text-amber-300 shrink-0" />
-                      <span className="text-sm font-semibold text-amber-300">Belum Dialokasikan</span>
+                    <div
+                      className="sticky left-0 z-20 flex flex-col justify-center px-3 bg-[var(--card-surface)]/92 backdrop-blur border-r border-[var(--glass-border)]"
+                      style={{ width: LEFT_COL_WIDTH, minWidth: LEFT_COL_WIDTH }}
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <AlertTriangle className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+                        <span className="text-sm font-semibold text-amber-300">Belum Dialokasikan</span>
+                      </div>
+                      <div className="text-[11px] text-muted-foreground mt-0.5">
+                        {barsByLine.unassigned.bars.length} WO tanpa line match
+                      </div>
                     </div>
-                    <div className="text-[11px] text-muted-foreground mt-0.5">
-                      {barsByLine.unassigned.length} WO tanpa line match
+                    <div className="relative" style={{ width: timelineWidth, height: unLineAreaHeight }}>
+                      {barsByLine.unassigned.bars.map((b) => {
+                        const g = barGeometry(b);
+                        if (g.width <= 0) return null;
+                        const sm = STATUS_META[b.status] || STATUS_META.draft;
+                        const top = laneTop(b.__lane ?? 0);
+                        return (
+                          <button
+                            key={b.wo_id} type="button"
+                            onClick={() => openDetail(b.wo_id)}
+                            className={`absolute rounded-md border ${sm.bar} ring-1 ring-amber-400/45 px-2 py-1 flex items-center overflow-hidden hover:-translate-y-0.5 hover:shadow-lg hover:z-20 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 transition-[transform,box-shadow,background-color] duration-200 cursor-pointer`}
+                            style={{ left: g.left, width: g.width, top, height: LANE_BAR_HEIGHT }}
+                            title={`${b.wo_number} · ${b.model_code || '-'} · Belum dialokasikan`}
+                            data-testid={`aps-wo-bar-${b.wo_id}`}
+                          >
+                            <span className={`relative text-[10px] font-semibold truncate ${sm.text}`}>{b.wo_number}</span>
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
-                  <div className="relative" style={{ width: timelineWidth, height: LINE_HEIGHT }}>
-                    {barsByLine.unassigned.map((b, bi) => {
-                      const g = barGeometry(b);
-                      if (g.width <= 0) return null;
-                      const sm = STATUS_META[b.status] || STATUS_META.draft;
-                      const top = 6 + (bi % 2) * 22;
-                      return (
-                        <button
-                          key={b.wo_id} type="button"
-                          onClick={() => openDetail(b.wo_id)}
-                          className={`absolute rounded-md border ${sm.bar} ring-1 ring-amber-400/45 px-2 py-1 flex items-center overflow-hidden hover:-translate-y-0.5 hover:shadow-lg hover:z-20 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 transition-[transform,box-shadow,background-color] duration-200 cursor-pointer`}
-                          style={{ left: g.left, width: g.width, top, height: 22 }}
-                          title={`${b.wo_number} · ${b.model_code || '-'} · Belum dialokasikan`}
-                          data-testid={`aps-wo-bar-${b.wo_id}`}
-                        >
-                          <span className={`relative text-[10px] font-semibold truncate ${sm.text}`}>{b.wo_number}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
+                );
+              })()}
             </div>
           </div>
         )}

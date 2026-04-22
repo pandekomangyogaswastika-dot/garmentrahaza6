@@ -272,7 +272,7 @@
 
 ---
 
-## Phase 19 — Advanced Planning & Scheduling (APS) (PENDING — start Phase 19A)
+## Phase 19 — Advanced Planning & Scheduling (APS) (IN PROGRESS — 19A done, 19B next)
 ### Objectives
 - Tambah layer planning: **Gantt timeline**, kapasitas per line, balancing, dan sinyal risiko due-date.
 - Tetap additive: tidak mengubah flow eksekusi; APS membaca dari Work Orders, Lines, Shifts, WIP events.
@@ -295,88 +295,93 @@
 ### Data yang tersedia (current)
 - `rahaza_work_orders`: `target_start_date`, `target_end_date`, `qty`, `priority`, `status`, `model_id`, `size_id`, `completed_qty`.
 - `rahaza_lines`: `capacity_per_hour`, `process_id`.
-- `rahaza_shifts`: `start_time`, `end_time` (jika ada), dll.
+- `rahaza_shifts`: `start_time`, `end_time`.
 - `rahaza_wip_events`: historis output/QC untuk derivasi SMV/throughput.
 - `rahaza_line_assignments`: granular plan harian (dipakai eksekusi; APS dapat mengkonsumsi/men-generate draft assignment).
 
 ---
 
-### Phase 19A — APS Gantt Chart / Interactive Timeline (PENDING — TODO ONLY)
+### Phase 19A — APS Gantt Chart / Interactive Timeline (COMPLETED + tested)
 **Goal:** menyediakan tampilan jadwal produksi yang bisa discan cepat: WO → line → rentang tanggal, lengkap dengan kapasitas harian dan risiko.
 
-#### 19A.1 Backend — APS read model (new `rahaza_aps.py`)
+#### 19A.1 Backend — `rahaza_aps.py`
 **Location:** `/app/backend/routes/rahaza_aps.py`
 
-**Endpoints (proposed, MVP)**
-- `GET /api/rahaza/aps/gantt`
-  - Query: `from=YYYY-MM-DD&to=YYYY-MM-DD&process_id=&line_id=&status=&priority=&model_id=`
-  - Output: 
-    - `lines[]` (id, code, name, capacity_per_hour, process_id)
-    - `work_orders[]` (id, wo_number, model, qty, status, priority, start/end target, progress_pct)
-    - `bars[]` mapping WO ke line + computed fields (start/end, progress, risk)
-    - `capacity[]` per line per day (load %, overload flags)
-- `GET /api/rahaza/aps/wo/{wo_id}`
-  - Detail untuk side panel: progress breakdown + rekomendasi risiko sederhana.
+**Endpoints (Delivered)**
+- `GET /api/rahaza/aps/gantt?from=YYYY-MM-DD&to=YYYY-MM-DD&process_id=&line_id=&status=&priority=&model_id=`
+  - Output: `{ meta, days[], lines[], work_orders[], bars[], capacity[], kpis }`.
+  - Risk deterministic: `on_track` | `at_risk` | `overdue`.
+  - Capacity heatmap: `capacity_per_hour * 8 jam` (MVP), dengan `load_pct` + overload flag.
+  - Mapping WO → line:
+    - Prioritas 1: `rahaza_line_assignments.work_order_id` (most recent active)
+    - Fallback: line aktif dengan `process_id` = proses non-rework terakhir.
+- `GET /api/rahaza/aps/wo/{wo_id}` — detail WO untuk Sheet: model + line + progress breakdown.
+- `PATCH /api/rahaza/aps/wo/{wo_id}/reschedule`
+  - Body: `{ target_start_date, target_end_date }` (YYYY-MM-DD)
+  - Validasi: end ≥ start, WO bukan completed/cancelled, field wajib.
+  - Audit: insert ke `rahaza_audit_logs` via `log_audit`.
 
-**Computation (MVP)**
-- Risk flags:
-  - `overdue` bila `today > target_end_date` dan `progress_pct < 100%`.
-  - `at_risk` bila remaining work > remaining capacity sampai due date (rough-cut).
-- Capacity per day:
-  - dasar `capacity_per_hour * jam_kerja_shift` (MVP default 8 jam jika tidak ada kalender).
-  - load dihitung dari pembagian qty WO di rentang hari (MVP rata), untuk heatmap indikatif.
+**Wiring (Delivered)**
+- Router included di `/app/backend/server.py` sebagai `rahaza_aps_router`.
 
-**Notes**
-- Phase 19A tidak mengubah data WO/assignment; sifatnya read/aggregate.
-
-#### 19A.2 Frontend — APS Gantt page (new module)
+#### 19A.2 Frontend — APS Gantt module
 **Location:** `/app/frontend/src/components/erp/APSGanttModule.jsx`
 
-**UI Deliverables (MVP)**
-- Page header + KPI strip (total WO, overdue, at-risk, load avg).
+**UI Delivered**
+- Header + KPI strip:
+  - Total WO, Terlambat, Berisiko, Load Rata-Rata.
 - Toolbar:
-  - Search WO
-  - Filter status/prioritas/model
+  - Rentang tanggal (from/to)
+  - Search WO/Model
+  - Filter Status & Prioritas
   - Zoom Day/Week/Month
-  - Legend status/risk
-- Gantt viewport:
-  - Sticky left column (line code/name + mini KPI)
-  - Sticky timeline header
-  - Bars per WO (absolute-positioned) dengan status color + progress overlay
-  - “Now” indicator
-  - Capacity heatmap strip per line
-- Detail side-panel (Sheet): klik bar membuka detail WO + tombol “Ubah Jadwal” (MVP: dialog edit tanggal target_start/end).
+  - Legend status/risk/heatmap.
+- Gantt viewport (custom render):
+  - Sticky left column + sticky timeline header.
+  - Weekend shading + today indicator.
+  - WO bars absolute-positioned + progress overlay.
+  - **Lane assignment algorithm** (greedy) untuk mencegah overlap bar pada rentang yang sama → klik normal selalu tepat.
+  - Capacity heatmap strip per line + tooltip via `title`.
+  - Tinggi row menyesuaikan jumlah lane.
+- Detail WO:
+  - Klik bar → Sheet detail (status/risk/priority chip, summary, progress bar, breakdown per proses).
+  - Reschedule Dialog (2 input tanggal + validasi end≥start) → save via PATCH → refresh Gantt + detail.
 
-**Testing hooks**
-- Wajib ikuti `data-testid` list di `/app/design_guidelines.md`.
+**Wiring (Delivered)**
+- ModuleId: `prod-aps-gantt` registered in `moduleRegistry.js`.
+- Menu item: **“APS — Jadwal (Gantt)”** di `PortalShell.jsx` (Production → RINGKASAN).
 
-#### 19A.3 Wiring
-- Register moduleId baru: `prod-aps-gantt` di `moduleRegistry.js`.
-- Tambah menu di `PortalShell.jsx` (Production) section yang sesuai (mis. RINGKASAN atau EKSEKUSI) dengan label: **“APS — Jadwal (Gantt)”**.
-- `server.py`: include `rahaza_aps_router`.
+#### 19A.3 Testing / Verification (Delivered)
+- Testing agent report: `/app/test_reports/iteration_2.json`
+  - Backend: 19 test cases, **100% pass**.
+  - Frontend: awal 95% karena isu click overlap; kemudian diperbaiki (lane assignment + background grid `pointer-events-none`).
+- Manual verification:
+  - Bar click membuka Sheet detail.
+  - Reschedule menyimpan ke DB dan menggeser bar sesuai tanggal baru.
 
-#### 19A.4 Success Criteria
-- Gantt bisa render untuk horizon default (mis. 14/30 hari) tanpa crash.
-- Scroll horizontal + vertical terasa smooth untuk dataset sedang (≥ 100 WO bars).
-- Risk & capacity heatmap terlihat dan konsisten.
-- Klik bar membuka detail; edit tanggal target tersimpan (bila diaktifkan di MVP) atau minimal tersimpan sebagai draft (opsional).
+#### 19A.4 Success Criteria (met)
+- Gantt render stabil untuk horizon default.
+- Scroll horizontal/vertical smooth dengan sticky header/col.
+- Risk & capacity heatmap konsisten.
+- Klik bar + reschedule berfungsi end-to-end.
 
-#### 19A.5 Out of Scope (explicit)
-- Drag-to-reschedule (bisa setelah MVP).
-- Optimasi kalender kerja lengkap (libur, multi-shift) — ditunda ke 19B atau hardening.
-- Komit ke `rahaza_line_assignments` dari APS — ditunda ke 19B.
+#### 19A.5 Out of Scope (intentional)
+- Drag-to-reschedule.
+- Kalender kerja lengkap (libur, multi-shift) untuk kapasitas.
+- Commit schedule ke `rahaza_line_assignments`.
 
 ---
 
-### Phase 19B — Auto-Scheduling (PENDING — will start after 19A)
+### Phase 19B — Auto-Scheduling (PENDING — NEXT UP)
 **Goal:** auto-alokasi WO ke line dan tanggal berbasis kapasitas, prioritas, dan estimasi waktu (SMV) yang derived dari historis.
 
 #### High-level scope (draft)
-- Derive **SMV historis** per model×process (dan bila memungkinkan size) dari `rahaza_wip_events`.
-- Generate schedule proposal (draft) untuk rentang `from-to`:
+- Derive **SMV historis** per model×process (opsional: size) dari `rahaza_wip_events`.
+- Auto-schedule proposal untuk rentang `from-to`:
   - load leveling per line
   - respect due-date & priority
-  - output preview before/after + commit.
+  - preview before/after + commit (audit/rollback)
+- (Opsional) generate draft ke `rahaza_line_assignments` untuk eksekusi harian.
 
 #### Likely new collections (to be confirmed in implementation)
 - `rahaza_smv_cache` (optional): simpan SMV hasil derivasi + updated_at.

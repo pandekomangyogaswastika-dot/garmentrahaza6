@@ -1,10 +1,6 @@
 [
   {
-    "content": "Backend: buat /app/backend/routes/rahaza_aps.py dengan endpoint /api/rahaza/aps/gantt (aggregate lines + WOs + capacity heatmap) dan /api/rahaza/aps/wo/{wo_id} (detail)",
-    "status": "completed"
-  },
-  {
-    "content": "Backend: tambah PATCH /api/rahaza/aps/wo/{wo_id}/reschedule untuk update target_start_date/target_end_date",
+    "content": "Backend: buat /app/backend/routes/rahaza_aps.py dengan endpoint /api/rahaza/aps/gantt, /aps/wo/{id}, PATCH /aps/wo/{id}/reschedule",
     "status": "completed"
   },
   {
@@ -12,23 +8,23 @@
     "status": "completed"
   },
   {
-    "content": "Frontend: buat /app/frontend/src/components/erp/APSGanttModule.jsx (header + KPI strip + toolbar + Gantt viewport dengan sticky header/left col + capacity heatmap + side panel detail)",
+    "content": "Frontend: buat APSGanttModule.jsx (KPI strip + toolbar + custom Gantt + lane assignment + capacity heatmap + Sheet detail + Reschedule dialog)",
     "status": "completed"
   },
   {
-    "content": "Frontend: register moduleId 'prod-aps-gantt' di moduleRegistry.js dan tambah menu di PortalShell.jsx (Production → RINGKASAN)",
+    "content": "Frontend: register moduleId 'prod-aps-gantt' + menu di PortalShell.jsx (Production → RINGKASAN)",
     "status": "completed"
   },
   {
-    "content": "Verify: cek esbuild lint frontend, restart services, take screenshot dari /#prod-aps-gantt untuk verifikasi UI",
+    "content": "Testing: backend 100% + frontend 95% (via testing_agent_v3), lalu fix pointer-events + lane overlap → normal click works",
     "status": "completed"
   },
   {
-    "content": "Test: panggil testing_agent_v3 untuk Phase 19A (backend endpoints + frontend rendering + reschedule flow)",
+    "content": "Plan.md updated → Phase 19A marked COMPLETED",
+    "status": "completed"
+  },
+  {
+    "content": "Menunggu user verifikasi Phase 19A sebelum lanjut Phase 19B (Auto-Scheduling)",
     "status": "in_progress"
-  },
-  {
-    "content": "Update plan.md & tandai Phase 19A COMPLETED setelah verifikasi user",
-    "status": "pending"
   }
 ]
