@@ -209,7 +209,7 @@ async def create_andon_event(request: Request):
     )
 
     logger.info(f"[andon] event created id={event['id']} type={andon_type} by={emp_name}")
-    return {**_ser(event), "message": f"Andon '{type_meta['label']}' telah dikirim ke supervisor"}
+    return {**_ser(event), "success_message": f"Andon '{type_meta['label']}' telah dikirim ke supervisor"}
 
 
 @router.get("/active")

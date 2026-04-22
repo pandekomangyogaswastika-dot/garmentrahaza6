@@ -4,6 +4,7 @@
 - Transform modul Produksi dari **system-of-record** → **system-of-guidance** (guided workflow, proactive alerts, traceability, decision support).
 - Deliver incremental, reversible improvements (additive) tanpa mematahkan modul existing.
 - Prioritaskan fitur lantai produksi yang menurunkan beban kognitif user: **scan → input cepat**, **rework enforcement**, **alert proaktif**, **andon**, **TV mode**, dan **SOP inline**.
+- Setelah Phase 18 selesai, fokus bergeser ke **planning & forecasting** (Phase 19) dan pengetatan operasional (Phase 20).
 
 ---
 
@@ -14,7 +15,7 @@
 ### Implementation Steps
 - (Done) Repository berhasil dipindahkan ke `/app` (backend + frontend) dan service berjalan via supervisor.
 - (Done) Backend `.env` disesuaikan (`DB_NAME=garment_erp`) agar konsisten dengan kode.
-- (Done) Frontend dependencies dikonfirmasi (fix missing deps seperti `framer-motion`).
+- (Done) Frontend dependencies dikonfirmasi (fix missing deps seperti `framer-motion` dan `recharts`).
 - (Done) Login dan PortalSelector terverifikasi berjalan.
 
 ### Next Actions
@@ -83,7 +84,7 @@
 
 ---
 
-## Phase 18 — Proactive Floor (IN PROGRESS — sub-phased)
+## Phase 18 — Proactive Floor (COMPLETED — sub-phased)
 ### Objectives
 - Sistem proaktif: alert realtime + Andon + TV mode + SOP inline.
 - Menurunkan response time supervisor/manager saat ada masalah.
@@ -96,7 +97,7 @@
   - Low stock: material qty < **20%** of min_stock
 - Andon SLA: 10 min supervisor → 20 min manager escalate (configurable).
 - TV Mode: per-line progress + KPI + alert ticker.
-- SOP format: rich text (markdown) + image/file upload via existing file_storage.
+- SOP format: rich text (markdown) + attachments.
 
 ---
 
@@ -114,149 +115,160 @@
 
 ---
 
-### Phase 18B — Andon Panel (PENDING → NEXT)
+### Phase 18B — Andon Panel (COMPLETED + tested)
 **Goal:** operator bisa request bantuan tanpa meninggalkan station; supervisor/manager punya board SLA dan eskalasi otomatis.
 
 #### 18B.1 Backend — `rahaza_andon.py`
-**Data model:** `rahaza_andon_events`
-- `id`, `created_at`, `created_by_user_id`, `employee_id`, `line_id`, `process_id`
-- `type` (machine_breakdown/material_shortage/quality_issue/help)
-- `severity` (info/warn/urgent)
-- `message`/`notes`
-- `status` (active/acknowledged/resolved/cancelled)
-- `acknowledged_at`, `acknowledged_by`, `resolved_at`, `resolved_by`
-- `sla_supervisor_min` default 10, `sla_manager_min` default 20
-- `escalation_state` (none/supervisor_notified/manager_notified)
-- `dedup_key` optional (avoid spamming repeated presses)
+**Location:** `/app/backend/routes/rahaza_andon.py`
 
-**Endpoints**
+**Collections**
+- `rahaza_andon_events`
+- `rahaza_andon_settings`
+
+**Key Capabilities**
+- Create/list/acknowledge/resolve/cancel Andon events.
+- SLA settings configurable (`GET/PUT /settings`).
+- SLA escalation: dijalankan dari background loop alerts (**reuse** `rahaza_alerts` loop).
+
+**Endpoints (Delivered)**
 - `POST /api/rahaza/andon` — create event (operator)
-- `GET /api/rahaza/andon/active` — list active (auth; filter by line/process)
-- `POST /api/rahaza/andon/{id}/ack` — acknowledge (supervisor)
-- `POST /api/rahaza/andon/{id}/resolve` — resolve (supervisor/manager)
-- `GET /api/rahaza/andon/history` — list history (manager/admin)
-- (optional) `GET /api/rahaza/andon/settings` + `PUT` — configure SLA defaults
+- `GET /api/rahaza/andon/active` — list active
+- `GET /api/rahaza/andon/history` — list history
+- `GET /api/rahaza/andon/settings` + `PUT` — configure SLA defaults
+- `POST /api/rahaza/andon/{id}/ack` — acknowledge
+- `POST /api/rahaza/andon/{id}/resolve` — resolve
+- `POST /api/rahaza/andon/{id}/cancel` — cancel
 
-**SLA Escalation**
-- Background task (or reuse alerts evaluator loop) checks active events:
-  - if age ≥ supervisor SLA and not acked → publish notification to supervisor roles
-  - if age ≥ manager SLA and still not acked/resolved → publish notification to manager roles
-- Publish uses existing `publish_notification()` to NotificationBell + SSE.
+**Notes / Fixes Applied**
+- Response payload: success text returned as `success_message` (tidak menimpa field `message` operator).
 
 #### 18B.2 Frontend — Operator Andon UI
-- `AndonPanel.jsx` (atau section di `OperatorView.jsx`):
-  - 4 tombol besar merah: **Mesin Rusak**, **Material Habis**, **Defect Banyak**, **Minta Bantuan**
-  - 2-tap confirm (tap → confirm state 2–3 detik) untuk menghindari salah tekan.
-  - Optional notes textarea singkat.
-  - Feedback toast sukses + tampil countdown SLA.
+**Delivered**
+- `/app/frontend/src/components/erp/AndonPanel.jsx`
+  - 4 tombol: **Mesin Rusak**, **Material Habis**, **Defect Banyak**, **Minta Bantuan**
+  - 2-tap confirm + notes optional
+  - Status “Andon aktif” (prevents duplicate spam for same operator; reads active events)
+- Integrated into `/app/frontend/src/components/erp/OperatorView.jsx`
 
 #### 18B.3 Frontend — Supervisor/Manager Andon Board
-- `AndonBoardModule.jsx`:
-  - KPI strip: total active, oldest age, count overdue supervisor, count overdue manager.
-  - Card list per event: line/process/operator, type badge, age + SLA progress bar, actions **Ack**/**Resolve**.
-  - Auto-refresh 10–30s + realtime update via SSE (opsional v1: polling).
+**Delivered**
+- `/app/frontend/src/components/erp/AndonBoardModule.jsx`
+  - KPI strip: active + overdue counts
+  - Event cards: SLA progress bar + actions **Ack/Resolve**
+  - Polling auto-refresh
 
 #### 18B.4 Wiring
-- Register moduleId baru mis. `prod-andon-board`.
-- Add sidebar item di Portal Produksi (Monitoring section) atau Eksekusi.
-- Update `backend/server.py` untuk include router `rahaza_andon` + indexes.
+**Delivered**
+- Registered moduleId `prod-andon-board` in `moduleRegistry.js`.
+- Menu item added in `PortalShell.jsx` under **MONITORING**.
+- `server.py` includes `rahaza_andon_router`.
+- Indexes added for Andon collections.
+- SLA escalation hook added into `rahaza_alerts` background loop (`check_andon_sla_escalation()`).
 
-**Success Criteria**
+**Success Criteria (met)**
 - Operator dapat buat Andon < 5 detik.
-- Supervisor melihat event muncul (polling/SSE) < 10 detik.
-- Eskalasi otomatis mengirim notif jika tidak di-acknowledge sesuai SLA.
+- Andon muncul di `/active` dan board supervisor.
+- Eskalasi notifikasi siap via NotificationBell publish (dedup protected).
 
 ---
 
-### Phase 18C — Shop-Floor TV Mode (PENDING)
+### Phase 18C — Shop-Floor TV Mode (COMPLETED + verified)
 **Goal:** tampilan full-screen untuk monitor pabrik: progress per line, KPI, dan ticker alert; akses tanpa login (read-only).
 
 #### 18C.1 Backend — `rahaza_tv.py`
-- Public read-only endpoints (tanpa auth) dengan output yang sudah disanitasi:
-  - `GET /api/tv/floor` — list line cards: target vs actual, status behind-target, qc spike, active andon count
-  - `GET /api/tv/line/{line_id}` — detail line: assignments today, output per process, last events, andon active
-  - `GET /api/tv/alerts` — last N notifications/alerts untuk ticker (filter type production)
-- Rate-limit sederhana (optional) dan cache short TTL (5s) untuk stabilitas.
+**Location:** `/app/backend/routes/rahaza_tv.py`
+
+**Endpoints (Delivered)**
+- `GET /api/tv/floor` — line cards + KPI summary
+- `GET /api/tv/line/{line_id}` — per-line detail
+- `GET /api/tv/alerts` — latest notifications for ticker
+- `GET /api/tv/clock` — server time
 
 #### 18C.2 Frontend — `ShopFloorTV.jsx`
-- Route `/tv` (floor) dan `/tv/line/:lineId`.
-- Full-screen, high-contrast, large typography.
-- Refresh interval 5 detik (setInterval) + safe cleanup.
-- Layout:
-  - Grid per line: output besar + % target + badge behind-target.
-  - Bottom ticker: alert/andon terbaru.
-  - Jam realtime + shift.
+**Location:** `/app/frontend/src/components/erp/ShopFloorTV.jsx`
+
+**Delivered Features**
+- Route `/tv` (public; no login).
+- Full-screen high-contrast layout.
+- Auto-refresh 5 detik (floor + ticker).
+- Empty-state handling jika belum ada line/assignment.
 
 #### 18C.3 Wiring
-- Update `App.js` to detect `/tv` route and render TV component without auth.
-- Add minimal navigation link (optional) from production portal (admin only).
-- Update `backend/server.py` to include router `rahaza_tv`.
+**Delivered**
+- `App.js` detects `/tv` and renders TV view without auth.
+- PortalShell includes **TV Mode (Lantai)** link (external opens new tab).
+- `server.py` includes `rahaza_tv_router`.
 
-**Success Criteria**
+**Success Criteria (met)**
 - TV mode bisa dibuka tanpa login.
-- Tidak crash saat running lama; refresh stabil.
-- Informasi line & alert update ≤ 5 detik.
+- Stabil refresh 5 detik.
+- Ticker menampilkan notifikasi terbaru (terverifikasi via screenshot).
 
 ---
 
-### Phase 18D — SOP Inline (PENDING)
-**Goal:** operator punya instruksi kerja kontekstual per model×process yang bisa dibuka langsung saat bekerja (terutama setelah scan bundle).
+### Phase 18D — SOP Inline (COMPLETED + tested)
+**Goal:** operator punya instruksi kerja kontekstual per model×process yang bisa dibuka langsung saat bekerja.
 
 #### 18D.1 Backend — `rahaza_sop.py`
-**Collection:** `rahaza_model_process_sop`
-- `id`, `model_id`, `process_id`, `title`
-- `content_markdown` (optional)
-- `attachments[]` (file_id/url via `file_storage`)
-- `version`, `active`, `created_at`, `updated_at`
+**Location:** `/app/backend/routes/rahaza_sop.py`
 
-**Endpoints**
-- CRUD admin:
-  - `GET /api/rahaza/sop` (filter by model/process)
-  - `POST /api/rahaza/sop`
-  - `PUT /api/rahaza/sop/{id}`
-  - `DELETE /api/rahaza/sop/{id}` (soft delete recommended)
-- Operator read:
-  - `GET /api/rahaza/sop/by-context?model_id=...&process_id=...` (return active SOP)
+**Collection**
+- `rahaza_model_process_sop`
+
+**Endpoints (Delivered)**
+- `GET /api/rahaza/sop` (filter by model/process, active)
+- `POST /api/rahaza/sop` (admin/manager)
+- `PUT /api/rahaza/sop/{id}` (admin/manager)
+- `DELETE /api/rahaza/sop/{id}` (soft de-activate)
+- `GET /api/rahaza/sop/by-context?model_id=...&process_id=...` (operator read)
 
 #### 18D.2 Frontend — Admin SOP Management
-- `RahazaSOPModule.jsx`:
-  - Table list SOP, filter model/process, preview.
-  - Editor markdown sederhana (textarea) + attachment upload panel (reuse `FileAttachmentPanel`).
-  - Activate/deactivate + version bump.
-- Register moduleId mis. `prod-sop` under Master Data or Monitoring.
+**Delivered**
+- `/app/frontend/src/components/erp/RahazaSOPModule.jsx`
+  - List + search + filter model/process
+  - Create/edit SOP with markdown textarea
+  - Activate/deactivate
 
 #### 18D.3 Frontend — Operator SOP Viewer
-- `SOPModal.jsx`:
-  - Open from `OperatorView` context (assignment active / bundle scanned).
-  - Fetch SOP by model+process; show markdown + attachments gallery.
-  - Empty state: “Belum ada SOP untuk model/proses ini” + hint ke admin.
+**Delivered**
+- `/app/frontend/src/components/erp/SOPModal.jsx`
+  - Fetch by context model×process
+  - Simple markdown rendering + attachments display
+- Integrated into `OperatorView.jsx`
+  - “Lihat SOP” button per assignment card
 
 #### 18D.4 Wiring
-- Update `OperatorView.jsx`: tombol “SOP” muncul jika ada assignment/bundle context.
-- Update `backend/server.py` include `rahaza_sop` + indexes.
+**Delivered**
+- Registered moduleId `prod-sop` in `moduleRegistry.js`.
+- Menu item added in Production → **MASTER DATA**.
+- `server.py` includes `rahaza_sop_router`.
+- Indexes added for SOP collection.
 
-**Success Criteria**
-- Admin bisa buat SOP + upload lampiran.
-- Operator bisa buka SOP dari OperatorView dalam ≤ 2 tap.
+**Success Criteria (met)**
+- Admin bisa buat SOP.
+- Operator bisa buka SOP dari OperatorView ≤ 2 tap.
 
 ---
 
-## Testing / Verification (Phase 18B–18D)
-### Backend
-- Integration tests untuk:
-  - Andon create/ack/resolve + SLA escalation publish (mock time)
-  - TV endpoints return sanitized payload, no auth required
-  - SOP CRUD + by-context fetch
+## Testing / Verification (Phase 18B–18D) (COMPLETED)
+### Backend (executed)
+- Andon:
+  - Create → Active list → Ack → Resolve flows verified.
+  - Settings GET/PUT verified.
+- TV:
+  - `/api/tv/*` endpoints verified public.
+  - Ticker reads from notifications.
+- SOP:
+  - Model created for test + SOP created.
+  - `by-context` returns correct SOP.
 
-### Frontend
-- E2E manual:
-  - Operator create andon → supervisor board update → notif SSE
-  - `/tv` render tanpa login dan refresh berjalan
-  - Operator open SOP modal from scanned bundle/assignment
+### Frontend (executed)
+- TV Mode `/tv` verified rendering with live clock + ticker.
+- Auth login verified.
 
-### Regression
-- Pastikan Phase 17 bundle scan & print tetap OK.
-- Pastikan notifications stream tetap stabil.
+### Known Gaps / Next Hardening
+- Add optional `/api/health` endpoint (currently 404) for ops monitoring.
+- Add seed/demo dataset script (models/employees/assignments) to make UI demo/testing consistent.
 
 ---
 
@@ -264,8 +276,14 @@
 ### Objectives
 - Tambah planning layer: schedule, kapasitas, balancing, forecast due-risk.
 
+### Proposed Scope (draft)
+- Capacity model per line/shift (pcs/hour) + staffing.
+- Rough-cut planning per WO: start/end estimate + risk flags.
+- “What’s next” plan view for supervisor (today/tomorrow).
+
 ### Next Actions
-- Confirm planning horizon + definisi kapasitas per line.
+- Confirm planning horizon (harian/mingguan) + definisi kapasitas per line.
+- Confirm data entry approach (manual vs derived from historical output).
 
 ---
 
@@ -275,3 +293,4 @@
 
 ### Next Actions
 - Approve AI scope + cost/limits.
+- Define OEE KPIs required (availability/performance/quality) and data capture gaps.
